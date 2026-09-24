@@ -727,6 +727,7 @@ export default function ProviderLimits() {
     const quotas = quotaData[conn.id]?.quotas;
     if (!quotas?.length) return false;
     return quotas.some((q) => {
+      if (q.isZeroLimit === true) return true;
       if (!q.total || q.total <= 0) return false;
       return calculatePercentage(q.used, q.total) <= DEPLETED_QUOTA_THRESHOLD;
     });
@@ -1061,6 +1062,9 @@ export default function ProviderLimits() {
           const rawQuotas = quota?.quotas || [];
           const visibleQuotas = filterQuotasByVisibility(conn.provider, rawQuotas, quotaVisibility);
           const hiddenQuotaRows = getHiddenQuotaRows(conn.provider, rawQuotas, quotaVisibility);
+          const baiAccountLabel = conn.provider === "bai" && quota?.raw?.account?.userId
+            ? `${quota.plan || "B.AI"} · User ${quota.raw.account.userId}`
+            : null;
 
           return (
             <Card
@@ -1096,6 +1100,14 @@ export default function ProviderLimits() {
                           {getConnectionSecondaryLabel(conn)}
                         </p>
                       ) : null}
+                      {baiAccountLabel && (
+                        <p
+                          className="text-[11px] text-text-muted/80 truncate"
+                          title={baiAccountLabel}
+                        >
+                          {baiAccountLabel}
+                        </p>
+                      )}
                       {conn.provider === "kiro" && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                           <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-600 dark:text-brand-300">

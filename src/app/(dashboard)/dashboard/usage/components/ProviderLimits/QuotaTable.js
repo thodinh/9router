@@ -5,6 +5,33 @@ import { formatResetTime, getRemainingPercentage } from "./utils";
 
 const PAGE_SIZE = 10;
 
+function formatCreditAmount(quota) {
+  const value = Number(quota.total);
+  if (!Number.isFinite(value)) return "0";
+  if (String(quota.currency || "").toLowerCase() === "credits") {
+    return Math.max(0, value).toLocaleString();
+  }
+  return Math.max(0, value).toFixed(2);
+}
+
+function formatCreditBalance(quota) {
+  const currency = quota.currency ? ` ${quota.currency}` : "";
+  return `${formatCreditAmount(quota)}${currency}`;
+}
+
+function formatUsdEquivalent(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "";
+  const formatted = amount.toFixed(6).replace(/\.?0+$/, "");
+  return ` (≈ $${formatted})`;
+}
+
+function formatQuotaTotal(quota) {
+  if (Number(quota.total) > 0) return quota.total.toLocaleString();
+  if (quota.isZeroLimit === true) return "0";
+  return "∞";
+}
+
 /**
  * Format reset time display (Today, 12:00 PM)
  */
@@ -196,15 +223,15 @@ export default function QuotaTable({
                       isUnlimited
                         ? `${quota.used.toLocaleString()} used · Unlimited`
                         : isCreditBalance
-                        ? `Credit balance: ${quota.total.toFixed(2)} ${quota.currency || ""}`
-                        : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`
+                        ? `Credit balance: ${formatCreditBalance(quota)}${formatUsdEquivalent(quota.usdEquivalent)}`
+                        : `${quota.used.toLocaleString()} / ${formatQuotaTotal(quota)}`
                     }
                   >
                     {isUnlimited
                       ? `${quota.used.toLocaleString()} used · Unlimited`
                       : isCreditBalance
-                      ? `Credit: ${quota.total.toFixed(2)} ${quota.currency || ""}`
-                      : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`}
+                      ? `Credit: ${formatCreditBalance(quota)}`
+                      : `${quota.used.toLocaleString()} / ${formatQuotaTotal(quota)}`}
                   </span>
                   <span className={`font-medium ${isUnlimited ? "text-green-600 dark:text-green-400" : isCreditBalance ? "text-blue-600 dark:text-blue-400" : colors.text} shrink-0`}>
                     {isUnlimited ? "Unlimited" : isCreditBalance ? "" : `${quota.remaining}%`}

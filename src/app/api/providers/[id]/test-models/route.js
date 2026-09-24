@@ -26,8 +26,8 @@ export async function POST(request, { params }) {
 
     const baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
 
-    // Compatible providers: fetch live model list
-    if (isCompatible && models.length === 0) {
+    // Compatible providers and B.AI expose a credential-scoped live model list.
+    if ((isCompatible || providerId === "bai") && models.length === 0) {
       try {
         const modelsRes = await fetch(`${baseUrl}/api/providers/${id}/models`);
         if (modelsRes.ok) {

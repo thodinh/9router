@@ -8,6 +8,12 @@ const ICON_ALIASES = {
   "ollama-search": "ollama",
 };
 
+// A few official brand marks are distributed as SVG. Keep the default PNG
+// lookup for existing providers while allowing an explicit vector asset.
+const ICON_EXTENSIONS = {
+  bai: "svg",
+};
+
 // Runtime only — first 404 remembers id for the whole session
 const failedIds = new Set();
 
@@ -26,10 +32,12 @@ export function resolveProviderIconId(providerId) {
   return aliased;
 }
 
-/** `/providers/{id}.png` or null when previously failed. */
+/** `/providers/{id}.{png|svg}` or null when previously failed. */
 export function getProviderIconSrc(providerId) {
   const id = resolveProviderIconId(providerId);
-  return id ? `/providers/${id}.png` : null;
+  if (!id) return null;
+  const extension = ICON_EXTENSIONS[id] || "png";
+  return `/providers/${id}.${extension}`;
 }
 
 /** Call from img onError so later mounts skip the request. */

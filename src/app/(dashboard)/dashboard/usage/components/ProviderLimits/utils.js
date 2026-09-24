@@ -668,6 +668,27 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "bai":
+        // B.AI reports balances and team member quotas in integer Credits.
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used ?? 0,
+              total: quota.total ?? 0,
+              resetAt: quota.resetAt ?? null,
+              remainingPercentage: quota.remainingPercentage,
+              unlimited: quota.unlimited,
+              isCreditBalance: quota.isCreditBalance,
+              currency: quota.currency,
+              usdEquivalent: quota.usdEquivalent,
+              quotaLimitType: quota.quotaLimitType,
+              isZeroLimit: quota.isZeroLimit,
+            });
+          });
+        }
+        break;
+
       case "deepseek":
         // Credit balance — remainingPercentage only (no absolute remaining).
         if (data.quotas) {

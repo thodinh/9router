@@ -25,7 +25,11 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import AddCompatibleModal from "./components/AddCompatibleModal";
-import { STATUS_FILTER_OPTIONS, matchesStatusFilter } from "./utils";
+import {
+  STATUS_FILTER_OPTIONS,
+  isProviderConfigured,
+  matchesStatusFilter,
+} from "./utils";
 
 function getStatusDisplay(connected, error, errorCode) {
   const parts = [];
@@ -107,6 +111,8 @@ export default function ProvidersPage() {
   const [testingMode, setTestingMode] = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [hideUnconfiguredProviders, setHideUnconfiguredProviders] = useState(false);
+  const [savingProviderVisibility, setSavingProviderVisibility] = useState(false);
   const notify = useNotificationStore();
   const searchQuery = useHeaderSearchStore((s) => s.query);
   const registerSearch = useHeaderSearchStore((s) => s.register);
@@ -152,15 +158,22 @@ export default function ProvidersPage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [connectionsRes, nodesRes] = await Promise.all([
+        const [connectionsRes, nodesRes, settingsRes] = await Promise.all([
           fetch("/api/providers"),
           fetch("/api/provider-nodes"),
+          fetch("/api/settings", { cache: "no-store" }),
         ]);
         const connectionsData = await connectionsRes.json();
         const nodesData = await nodesRes.json();
+        const settingsData = settingsRes.ok ? await settingsRes.json() : {};
         if (connectionsRes.ok)
           setConnections(connectionsData.connections || []);
         if (nodesRes.ok) setProviderNodes(nodesData.nodes || []);
+        if (settingsRes.ok) {
+          setHideUnconfiguredProviders(
+            settingsData.hideUnconfiguredProviders === true,
+          );
+        }
       } catch (error) {
         console.log("Error fetching data:", error);
       } finally {
@@ -216,6 +229,33 @@ export default function ProvidersPage() {
 
   const matchStatus = (stats, isNoAuth) =>
     matchesStatusFilter(statusFilter, stats, isNoAuth);
+
+  const isProviderVisible = (providerId, provider = null) =>
+    !hideUnconfiguredProviders ||
+    isProviderConfigured(providerId, connections, provider);
+
+  const handleToggleUnconfigured = async (nextHidden) => {
+    if (savingProviderVisibility || nextHidden === hideUnconfiguredProviders) {
+      return;
+    }
+
+    const previous = hideUnconfiguredProviders;
+    setHideUnconfiguredProviders(nextHidden);
+    setSavingProviderVisibility(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hideUnconfiguredProviders: nextHidden }),
+      });
+      if (!res.ok) throw new Error("Failed to update provider visibility");
+    } catch (error) {
+      setHideUnconfiguredProviders(previous);
+      notify.error("Failed to save provider visibility");
+    } finally {
+      setSavingProviderVisibility(false);
+    }
+  };
 
   // Toggle all connections for a provider on/off. authType may be a single
   // string or an array (kiro counts oauth + api_key/apikey together).
@@ -273,7 +313,10 @@ export default function ProvidersPage() {
       apiType: node.apiType,
     }))
     .filter(
-      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+      (p) =>
+        isProviderVisible(p.id) &&
+        matchSearch(p.name) &&
+        matchStatus(getProviderStats(p.id, "apikey")),
     );
 
   const anthropicCompatibleProviders = providerNodes
@@ -285,7 +328,10 @@ export default function ProvidersPage() {
       textIcon: "AC",
     }))
     .filter(
-      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+      (p) =>
+        isProviderVisible(p.id) &&
+        matchSearch(p.name) &&
+        matchStatus(getProviderStats(p.id, "apikey")),
     );
 
   // Dual-auth providers (oauth + apikey) store API keys as authType "apikey"
@@ -310,6 +356,7 @@ export default function ProvidersPage() {
     Object.entries(OAUTH_PROVIDERS).filter(
       ([key, info]) =>
         !info.hidden &&
+        isProviderVisible(key, info) &&
         matchSearch(info.name) &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
     ),
@@ -319,6 +366,7 @@ export default function ProvidersPage() {
     .filter(
       ([key, info]) =>
         !info.hidden &&
+        isProviderVisible(key, info) &&
         matchSearch(info.name) &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
     )
@@ -330,6 +378,7 @@ export default function ProvidersPage() {
     .filter(
       ([key, info]) =>
         !info.hidden &&
+        isProviderVisible(key, info) &&
         matchSearch(info.name) &&
         (info.serviceKinds ?? ["llm"]).includes("llm") &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
@@ -350,6 +399,7 @@ export default function ProvidersPage() {
     .filter(
       ([key, info]) =>
         !info.hidden &&
+        isProviderVisible(key, info) &&
         (info.serviceKinds ?? ["llm"]).includes("llm") &&
         matchSearch(info.name) &&
         matchStatus(getProviderStats(key, "apikey"), info.noAuth),
@@ -386,7 +436,16 @@ export default function ProvidersPage() {
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <div title="Hide providers that do not have a configured connection">
+          <Toggle
+            size="sm"
+            checked={hideUnconfiguredProviders}
+            onChange={handleToggleUnconfigured}
+            label="Hide unconfigured"
+            disabled={savingProviderVisibility}
+          />
+        </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -409,6 +468,15 @@ export default function ProvidersPage() {
           <p className="text-text-muted text-sm">
             No providers match your search or filters
           </p>
+          {hideUnconfiguredProviders && !searchQuery.trim() && statusFilter === "all" && (
+            <button
+              type="button"
+              onClick={() => handleToggleUnconfigured(false)}
+              className="mt-3 rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/5"
+            >
+              Show unconfigured providers
+            </button>
+          )}
         </div>
       )}
 
@@ -442,7 +510,11 @@ export default function ProvidersPage() {
         anthropicCompatibleProviders.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-2 border border-dashed border-border rounded-xl text-text-muted text-sm">
             <span className="material-symbols-outlined text-[18px]">extension</span>
-            <span>No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints</span>
+            <span>
+              {providerNodes.length > 0
+                ? "No custom providers match the current filters"
+                : "No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints"}
+            </span>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">

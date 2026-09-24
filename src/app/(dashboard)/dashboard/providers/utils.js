@@ -17,3 +17,14 @@ export function matchesStatusFilter(statusFilter, stats, isNoAuth = false) {
   if (statusFilter === "all") return true;
   return getConnectionStatus(stats, isNoAuth) === statusFilter;
 }
+
+/**
+ * A provider is configured when it has at least one stored connection.
+ * No-auth providers are usable without a connection and always count as configured.
+ */
+export function isProviderConfigured(providerId, connections = [], provider = null) {
+  if (provider?.noAuth === true) return true;
+  return Array.isArray(connections)
+    ? connections.some((connection) => connection?.provider === providerId)
+    : false;
+}

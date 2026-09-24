@@ -1,6 +1,10 @@
 services:
   9router:
-    image: decolua/9router:latest
+    # Build the image from this checkout instead of pulling the published image.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: 9router:source
     container_name: 9router
     restart: always
     ports:
@@ -24,6 +28,34 @@ services:
     restart: always
     ports:
       - "8787:8787"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: 9router-cloudflared
+    restart: always
+    # The tunnel is managed remotely by Cloudflare. The host network lets a
+    # dashboard route of http://localhost:20128 reach the published 9Router
+    # service. The host alias also keeps http://9router:20128 routes working.
+    network_mode: host
+    extra_hosts:
+      - "9router:127.0.0.1"
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - --edge-ip-version
+      - "4"
+      - --metrics
+      - 127.0.0.1:0
+      - run
+      - --token
+      - ${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN is required in .env}
+      - --url
+      - http://127.0.0.1:20128
+    depends_on:
+      9router:
+        condition: service_started
 
 volumes:
   9router-data:

@@ -19,6 +19,53 @@ docker run -d \
 
 App listens on port `20128`. Open: http://localhost:20128
 
+## Build and deploy from source with Docker Compose
+
+The repository's `docker-compose.yml` builds the `9router` service from the
+current checkout and starts the optional Headroom sidecar. Configure the
+runtime environment first, then build and start the stack:
+
+```bash
+if [ ! -f .env ]; then cp .env.example .env; fi
+# Edit .env and set strong JWT_SECRET, INITIAL_PASSWORD, and API_KEY_SECRET values.
+docker compose up -d --build
+docker compose ps
+curl -fsS http://localhost:20128/api/health
+```
+
+The named volume `9router-data` is mounted at `/app/data`, so the SQLite
+database and settings survive container rebuilds. Use `docker compose logs -f
+9router` for logs. Subsequent source changes are deployed with:
+
+```bash
+docker compose up -d --build
+```
+
+`docker compose down` keeps the data volume; avoid `docker compose down -v`
+unless you intentionally want to delete all 9Router data.
+
+## Cloudflare Tunnel
+
+The Compose stack includes a `cloudflared` connector. Put the remotely-managed
+Cloudflare Tunnel token in `.env`:
+
+```env
+CF_TUNNEL_TOKEN=your-tunnel-token
+```
+
+Then start or update the stack:
+
+```bash
+docker compose up -d --build
+docker compose logs -f cloudflared
+```
+
+The connector uses host networking so a Cloudflare route to
+`http://localhost:20128` reaches 9Router. If the public hostname has not been
+created yet, add one in **Cloudflare Zero Trust → Networks → Tunnels → your
+tunnel → Public Hostnames**, with service `http://localhost:20128`. The token
+connects the connector but does not create a public hostname automatically.
+
 ## Manage container
 
 ```bash

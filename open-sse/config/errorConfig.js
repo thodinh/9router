@@ -64,6 +64,12 @@ export const ERROR_RULES = [
   { text: "rate limit",               backoff: true },
   { text: "too many requests",        backoff: true },
   { text: "quota exceeded",           backoff: true },
+  // Some providers report exhausted account credit as HTTP 400 instead of
+  // 402/403/429. Treat both the machine-readable code and common wording as
+  // account-scoped so the router can try another account/model.
+  { text: "insufficient_user_quota",  cooldownMs: COOLDOWN.long },
+  { text: "insufficient balance",     cooldownMs: COOLDOWN.long },
+  { text: "insufficient credit",      cooldownMs: COOLDOWN.long },
   { text: "capacity",                 backoff: true },
   { text: "overloaded",               backoff: true },
 

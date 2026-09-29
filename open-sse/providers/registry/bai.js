@@ -32,6 +32,8 @@ export default {
   // provider page, and passthroughModels (upstream behaviour) accepts any id
   // beyond this list; add new model IDs here when the upstream catalog changes.
   models: [
+    // Default model = models[0] (see getDefaultModel in config/providerModels.js).
+    { id: "qwen3.8-flash", name: "Qwen 3.8 Flash" },
     { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
     { id: "claude-opus-5", name: "Claude Opus 5" },
     { id: "claude-opus-4.8", name: "Claude Opus 4.8" },
@@ -87,7 +89,6 @@ export default {
     { id: "mimo-v2.5-pro", name: "MIMO V2.5 Pro" },
     { id: "mimo-v2.5", name: "MIMO V2.5" },
     { id: "qwen3.8-max", name: "Qwen 3.8 Max" },
-    { id: "qwen3.8-flash", name: "Qwen 3.8 Flash" },
     { id: "qwen3.8-27b", name: "Qwen 3.8 27B" },
   ],
   modelsFetcher: { url: "https://api.b.ai/v1/models", type: "openai" },

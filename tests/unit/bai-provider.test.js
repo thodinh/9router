@@ -21,8 +21,8 @@ describe("B.AI provider", () => {
   });
 
   it("uses the verified static catalog with live passthrough", () => {
-    expect(bai.models[0]).toMatchObject({ id: "claude-opus-5.5", name: "Claude Opus 5.5" });
-    expect(getDefaultModel("bai")).toBe("claude-opus-5.5");
+    expect(bai.models[0]).toMatchObject({ id: "qwen3.8-flash", name: "Qwen 3.8 Flash" });
+    expect(getDefaultModel("bai")).toBe("qwen3.8-flash");
     expect(bai.passthroughModels).toBe(true);
   });
 

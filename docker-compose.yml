@@ -24,3 +24,23 @@ services:
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
+      # In-container DNS — the headroom sidecar below (DB settings point here too).
+      HEADROOM_URL: http://headroom:8787
+    depends_on:
+      - headroom
+
+  headroom:
+    # Repo moved: chopratejas/headroom → headroomlabs-ai/headroom (old ghcr path now returns 403).
+    image: ghcr.io/headroomlabs-ai/headroom:latest
+    container_name: headroom
+    restart: always
+    # Default binds loopback inside the container — must listen on all
+    # interfaces for the 9router container to reach it over the compose network.
+    command: ["--host", "0.0.0.0"]
+    environment:
+      # /v1/compress is loopback-only by default and answers remote callers
+      # with 404 ("404 means blocked, not missing") — opt in for container-to-
+      # container calls from the 9router service.
+      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
+    ports:
+      - "8787:8787"

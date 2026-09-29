@@ -1,5 +1,6 @@
 export default {
   id: "bai",
+  priority: 120,
   alias: "bai",
   aliases: ["b-ai", "b.ai"],
   uiAlias: "bai",
@@ -25,11 +26,11 @@ export default {
       url: "https://api.b.ai/v1/balance",
     },
   },
-  // Catalog fetched from https://api.b.ai/v1/models (2026-09-25, verified across
-  // multiple API keys — the list is identical per key). The models array is the
-  // static dropdown so users only add their API key. passthroughModels is NOT
-  // enabled (it defaults to disabled), so only these catalogued IDs are accepted;
-  // add new model IDs here when the upstream catalog changes.
+  // Static fallback list (verified across multiple API keys on 2026-09-25 — the
+  // catalogue is identical per key) so the dropdown works without a live fetch.
+  // modelsFetcher refreshes the list from https://api.b.ai/v1/models on the
+  // provider page, and passthroughModels (upstream behaviour) accepts any id
+  // beyond this list; add new model IDs here when the upstream catalog changes.
   models: [
     { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
     { id: "claude-opus-5", name: "Claude Opus 5" },
@@ -89,6 +90,8 @@ export default {
     { id: "qwen3.8-flash", name: "Qwen 3.8 Flash" },
     { id: "qwen3.8-27b", name: "Qwen 3.8 27B" },
   ],
+  modelsFetcher: { url: "https://api.b.ai/v1/models", type: "openai" },
+  passthroughModels: true,
   features: {
     usage: true,
     usageApikey: true,

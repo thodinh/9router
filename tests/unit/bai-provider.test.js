@@ -20,9 +20,9 @@ describe("B.AI provider", () => {
     expect(bai.features).toMatchObject({ usage: true, usageApikey: true });
   });
 
-  it("uses Qwen3.8 Flash as the default while allowing live catalog passthrough", () => {
-    expect(bai.models[0]).toMatchObject({ id: "qwen3.8-flash", name: "Qwen3.8 Flash" });
-    expect(getDefaultModel("bai")).toBe("qwen3.8-flash");
+  it("uses the verified static catalog with live passthrough", () => {
+    expect(bai.models[0]).toMatchObject({ id: "claude-opus-5.5", name: "Claude Opus 5.5" });
+    expect(getDefaultModel("bai")).toBe("claude-opus-5.5");
     expect(bai.passthroughModels).toBe(true);
   });
 

@@ -67,6 +67,27 @@ export {
   saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,
 } from "./repos/requestDetailsRepo.js";
 
+// Model lab tests
+export {
+  getModelTests, upsertModelTest, clearModelTests,
+} from "./repos/modelTestsRepo.js";
+
+// Provider live-model drift
+export {
+  getProviderDrift, setProviderDrift, deleteProviderDrift,
+} from "./repos/providerDriftRepo.js";
+
+// Model ratings (1-5 stars)
+export {
+  getModelRatings, getModelRating, setModelRating,
+} from "./repos/modelRatingsRepo.js";
+
+// Model library catalog (external metadata cache)
+export {
+  saveModelInfo, clearModelInfo, getModelInfoList, getModelInfoMap,
+  setCatalogSyncedAt, getCatalogSyncedAt, getCatalogStats,
+} from "./repos/modelInfoRepo.js";
+
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();

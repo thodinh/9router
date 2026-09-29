@@ -3,13 +3,18 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 4;
 
+// Durability over the bind-mount (Docker Desktop / VirtioFS) host path.
+// WAL + NORMAL + mmap caused torn/data-loss writes on the virtualized mount
+// (recurring "database disk image is malformed" on providerConnections).
+// DELETE journal + FULL sync + no mmap is slower but safe on virtual mounts:
+// every commit is fsynced and recovery uses the classic rollback journal.
 export const PRAGMA_SQL = `
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
+PRAGMA journal_mode = DELETE;
+PRAGMA synchronous = FULL;
 PRAGMA temp_store = MEMORY;
-PRAGMA mmap_size = 30000000;
+PRAGMA mmap_size = 0;
 PRAGMA cache_size = -64000;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
@@ -150,6 +155,65 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_rd_provider ON requestDetails(provider)",
       "CREATE INDEX IF NOT EXISTS idx_rd_model ON requestDetails(model)",
       "CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
+    ],
+  },
+  modelTests: {
+    columns: {
+      provider: "TEXT NOT NULL",
+      model: "TEXT NOT NULL",
+      kind: "TEXT NOT NULL DEFAULT 'llm'",
+      source: "TEXT NOT NULL DEFAULT 'builtin'",
+      ok: "INTEGER NOT NULL DEFAULT 0",
+      latencyMs: "INTEGER",
+      error: "TEXT",
+      testedAt: "TEXT NOT NULL",
+    },
+    primaryKey: "PRIMARY KEY (provider, model, kind)",
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_mt_provider ON modelTests(provider)",
+      "CREATE INDEX IF NOT EXISTS idx_mt_tested ON modelTests(testedAt DESC)",
+    ],
+  },
+  providerDrift: {
+    columns: {
+      provider: "TEXT PRIMARY KEY",
+      connectionId: "TEXT",
+      liveModels: "TEXT NOT NULL",
+      newModels: "TEXT NOT NULL",
+      removedModels: "TEXT NOT NULL",
+      warning: "TEXT",
+      fetchedAt: "TEXT NOT NULL",
+    },
+  },
+  modelRatings: {
+    columns: {
+      provider: "TEXT NOT NULL",
+      model: "TEXT NOT NULL",
+      kind: "TEXT NOT NULL DEFAULT 'llm'",
+      rating: "INTEGER NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    primaryKey: "PRIMARY KEY (provider, model, kind)",
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_mr_provider ON modelRatings(provider)",
+    ],
+  },
+  modelInfo: {
+    columns: {
+      model: "TEXT PRIMARY KEY",
+      name: "TEXT",
+      creator: "TEXT",
+      params: "TEXT",
+      contextLength: "INTEGER",
+      pricePrompt: "REAL",
+      priceCompletion: "REAL",
+      rating: "REAL",
+      source: "TEXT",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_mi_creator ON modelInfo(creator)",
+      "CREATE INDEX IF NOT EXISTS idx_mi_rating ON modelInfo(rating)",
     ],
   },
 };

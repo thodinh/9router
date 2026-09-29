@@ -245,3 +245,93 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
 
   return { ok: true, latencyMs, error: null, status: res.status };
 }
+
+const STREAM_STALL_MS = 20_000;
+const STREAM_TOTAL_TIMEOUT_MS = 30_000;
+
+// Stream probe: same chat completion as pingModelByKind but stream:true, read
+// to completion. A one-shot ping can pass on a provider that then stalls
+// mid-stream (b.ai lesson: test 200 while ~10% of streams hang for minutes),
+// so "alive" really means: SSE bytes start AND the stream finishes.
+// Only meaningful for chat kinds — embeddings/rerank have no stream to read.
+export async function pingModelStream(
+  model,
+  kind = "llm",
+  baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`
+) {
+  if (kind && kind !== "llm") return { ok: true, skipped: true, latencyMs: null, error: null };
+  const headers = await getInternalHeaders();
+  const start = Date.now();
+
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        // Small budget: this probe only proves bytes flow to completion, not
+        // answer quality. Reasoning models spend it on thinking — still fine,
+        // thinking tokens stream too.
+        max_tokens: 64,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+      signal: AbortSignal.timeout(STREAM_TOTAL_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const msg = err?.name === "TimeoutError" ? `stream-timeout after ${STREAM_TOTAL_TIMEOUT_MS / 1000}s` : `stream fetch failed: ${err?.message || err}`;
+    return { ok: false, latencyMs: Date.now() - start, error: msg };
+  }
+
+  const headerMs = Date.now() - start;
+  if (!res.ok) {
+    const rawText = await res.text().catch(() => "");
+    let parsed = null;
+    try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
+    const detail = parsed?.error?.message || parsed?.msg || parsed?.message || parsed?.error || rawText;
+    return { ok: false, latencyMs: headerMs, status: res.status, error: `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 300)}` : ""}` };
+  }
+  if (!res.body) return { ok: false, latencyMs: headerMs, status: res.status, error: "stream response has no body" };
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let ttfbMs = null;
+  let lastChunkAt = Date.now();
+  let chunks = 0;
+  let sawDone = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const now = Date.now();
+      if (ttfbMs === null) ttfbMs = now - start;
+      chunks++;
+      // Guard against a slow drip: bytes must keep arriving within the stall
+      // window and the whole stream must finish inside the total timeout.
+      if (now - lastChunkAt > STREAM_STALL_MS || now - start > STREAM_TOTAL_TIMEOUT_MS) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return { ok: false, latencyMs: now - start, ttfbMs, error: `stream-stall: no bytes for ${STREAM_STALL_MS / 1000}s`, status: res.status };
+      }
+      lastChunkAt = now;
+      buf += decoder.decode(value, { stream: true });
+      if (buf.includes("data: [DONE]") || buf.includes("data:[DONE]")) { sawDone = true; break; }
+      // Guard against a slow drip that outlives the total timeout margin.
+      if (now - start > STREAM_TOTAL_TIMEOUT_MS || now - lastChunkAt > STREAM_STALL_MS) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return { ok: false, latencyMs: now - start, ttfbMs, error: `stream-stall: no bytes for ${STREAM_STALL_MS / 1000}s`, status: res.status };
+      }
+    }
+  } catch (err) {
+    const msg = err?.name === "TimeoutError" || err?.name === "AbortError"
+      ? `stream-stall: aborted after ${STREAM_TOTAL_TIMEOUT_MS / 1000}s`
+      : `stream read failed: ${err?.message || err}`;
+    return { ok: false, latencyMs: Date.now() - start, ttfbMs, error: msg, status: res.status };
+  }
+
+  const latencyMs = Date.now() - start;
+  if (chunks === 0) return { ok: false, latencyMs, error: "stream produced no bytes", status: res.status };
+  // Some providers close without [DONE]; bytes-to-completion is enough here.
+  return { ok: true, latencyMs, ttfbMs, chunks, sawDone, error: null, status: res.status };
+}

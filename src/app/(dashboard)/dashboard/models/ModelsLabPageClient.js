@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Badge, Modal } from "@/shared/components";
 import { getRelativeTime } from "@/shared/utils";
 import { lookupParams } from "@/lib/modelLab/params.js";
+import ModelsLabFreeTab from "./ModelsLabFreeTab";
 
 const MATRIX_PAGE = 40;
 const FLAT_PAGE = 100;
@@ -302,7 +303,7 @@ export default function ModelsLabPageClient() {
       const data = await loadLab();
       try {
         const v = globalThis.localStorage?.getItem(VIEW_KEY);
-        if (v === "flat" || v === "grouped") setView(v);
+        if (v === "flat" || v === "grouped" || v === "free") setView(v);
         if (globalThis.localStorage?.getItem(HIDE_DISABLED_KEY) === "1") setHideDisabled(true);
       } catch { /* prefs are best-effort */ }
       if (!data) return;
@@ -342,11 +343,13 @@ export default function ModelsLabPageClient() {
     }
     setSweep((prev) => ({
       running: evt.running ?? prev.running,
+      mode: evt.mode ?? prev.mode,
       jobId: evt.jobId ?? prev.jobId,
       total: evt.total ?? prev.total,
       done: evt.done ?? prev.done,
       okCount: evt.okCount ?? prev.okCount,
       failCount: evt.failCount ?? prev.failCount,
+      noCredit: evt.noCredit ?? prev.noCredit,
       startedAt: evt.startedAt ?? prev.startedAt,
       finishedAt: evt.finishedAt ?? prev.finishedAt,
       lastError: evt.lastError ?? prev.lastError,
@@ -357,6 +360,7 @@ export default function ModelsLabPageClient() {
   }, [loadLab]);
 
   const openStream = useCallback(() => {
+    if (readerRef.current) return; // already listening for sweep events
     fetch("/api/models/lab/test/stream").then(async (res) => {
       if (!res.ok || !res.body) return;
       const reader = res.body.getReader();
@@ -379,19 +383,39 @@ export default function ModelsLabPageClient() {
           }
         }
       } catch { /* stream closed */ }
+      finally {
+        // Dropped or finished — allow the next job to reopen the stream.
+        if (readerRef.current === reader) readerRef.current = null;
+      }
     });
   }, [applySweepEvent]);
 
   const startTestAll = useCallback(async () => {
     setError("");
-    await fetch("/api/models/lab/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    // The POST reply only arrives when the sweep finishes — open the event
+    // stream FIRST or every progress/result event of a long job is lost.
     openStream();
+    // In the "Săn Free" tab this button means "test the free candidates" —
+    // only providers already connected get probed (mode:"free" sweep).
+    const body = view === "free" ? JSON.stringify({ mode: "free" }) : "{}";
+    fetch("/api/models/lab/test", { method: "POST", headers: { "Content-Type": "application/json" }, body })
+      .catch(() => setError("Failed to start tests"));
+  }, [openStream, view]);
+
+  // Alive scan: credit-aware, batched (per-connection lane, wave 8 + 3s,
+  // 429 backoff) and stream-confirmed — only providers still holding credit.
+  const startScan = useCallback(async () => {
+    setError("");
+    openStream(); // before the POST — it only replies when the scan finishes
+    fetch("/api/models/lab/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "alive" }) })
+      .catch(() => setError("Failed to start the alive scan"));
   }, [openStream]);
 
   const startTestProvider = useCallback(async (provider) => {
     setError("");
-    await fetch("/api/models/lab/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providers: [provider] }) });
-    openStream();
+    openStream(); // before the POST — it only replies when the sweep finishes
+    fetch("/api/models/lab/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providers: [provider] }) })
+      .catch(() => setError("Failed to start tests"));
   }, [openStream]);
 
   const syncDrift = useCallback(async (provider) => {
@@ -583,8 +607,11 @@ export default function ModelsLabPageClient() {
           <Button variant="secondary" icon="sync" onClick={() => syncDrift()} loading={busy === "drift"} disabled={sweep.running}>
             {sweep.running ? "" : "Sync All"}
           </Button>
-          <Button icon="science" onClick={startTestAll} loading={sweep.running} disabled={sweep.running}>
-            {sweep.running ? "Testing…" : "Test All"}
+          <Button variant="secondary" icon="gps_fixed" onClick={startScan} loading={sweep.running && sweep.mode === "alive"} disabled={sweep.running}>
+            {sweep.running && sweep.mode === "alive" ? "Scanning…" : "Scan alive"}
+          </Button>
+          <Button icon="science" onClick={startTestAll} loading={sweep.running && sweep.mode !== "alive"} disabled={sweep.running} title={view === "free" ? "Stream-probe every connected free candidate in this tab" : "Test every model in the library"}>
+            {sweep.running && sweep.mode !== "alive" ? "Testing…" : view === "free" ? "Test free" : "Test All"}
           </Button>
         </div>
       </div>
@@ -605,8 +632,11 @@ export default function ModelsLabPageClient() {
       {sweep.running && (
         <div className="border border-border rounded-xl p-4">
           <div className="flex items-center justify-between text-sm mb-2">
-            <span className="font-medium">Running tests</span>
-            <span className="text-text-muted">{sweep.done}/{sweep.total} · {sweep.okCount} ok · {sweep.failCount} failed</span>
+            <span className="font-medium">{sweep.mode === "alive" ? "Alive scan" : sweep.mode === "free" ? "Testing free candidates" : "Running tests"}</span>
+            <span className="text-text-muted">
+              {sweep.done}/{sweep.total} · {sweep.okCount} ok · {sweep.failCount} failed
+              {(sweep.noCredit || 0) > 0 && ` · ${sweep.noCredit} provider(s) skipped: no credit`}
+            </span>
           </div>
           <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
             <div className="h-full bg-brand-500 transition-all" style={{ width: `${progress}%` }} />
@@ -632,14 +662,16 @@ export default function ModelsLabPageClient() {
             {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         )}
-        <button
-          onClick={toggleHideDisabled}
-          className="flex items-center gap-1 px-2.5 py-2 text-xs border border-border rounded-lg text-text-muted hover:text-primary hover:bg-surface-2 transition-colors"
-          title={hideDisabled ? "Disabled models are hidden — click to show them" : `Disabled models are visible — click to hide them${disabledTotal ? ` (${disabledTotal})` : ""}`}
-        >
-          <span className={`material-symbols-outlined text-base ${hideDisabled ? "text-brand-500" : ""}`}>{hideDisabled ? "toggle_on" : "toggle_off"}</span>
-          {hideDisabled ? "Show disabled" : `Hide disabled${disabledTotal ? ` (${disabledTotal})` : ""}`}
-        </button>
+        {view !== "free" && (
+          <button
+            onClick={toggleHideDisabled}
+            className="flex items-center gap-1 px-2.5 py-2 text-xs border border-border rounded-lg text-text-muted hover:text-primary hover:bg-surface-2 transition-colors"
+            title={hideDisabled ? "Disabled models are hidden — click to show them" : `Disabled models are visible — click to hide them${disabledTotal ? ` (${disabledTotal})` : ""}`}
+          >
+            <span className={`material-symbols-outlined text-base ${hideDisabled ? "text-brand-500" : ""}`}>{hideDisabled ? "toggle_on" : "toggle_off"}</span>
+            {hideDisabled ? "Show disabled" : `Hide disabled${disabledTotal ? ` (${disabledTotal})` : ""}`}
+          </button>
+        )}
         <div className="flex items-center border border-border rounded-lg overflow-hidden text-xs">
           <button
             onClick={() => changeView("flat")}
@@ -651,10 +683,17 @@ export default function ModelsLabPageClient() {
             className={`px-3 py-2 transition-colors ${view === "grouped" ? "bg-brand-500 text-white" : "text-text-muted hover:bg-surface-2 hover:text-primary"}`}
             title="Group models by provider"
           >By provider</button>
+          <button
+            onClick={() => changeView("free")}
+            className={`px-3 py-2 transition-colors ${view === "free" ? "bg-brand-500 text-white" : "text-text-muted hover:bg-surface-2 hover:text-primary"}`}
+            title="Hunt free models & free-tier providers to add"
+          >Săn Free</button>
         </div>
       </div>
 
-      {view === "flat" ? (
+      {view === "free" ? (
+        <ModelsLabFreeTab search={search} disabled={sweep.running} liveResults={liveResults} />
+      ) : view === "flat" ? (
         <div className="border border-border rounded-xl overflow-hidden">
           {driftPending.length > 0 && (
             <div className="px-4 py-2 bg-yellow-500/5 border-b border-border flex items-center gap-2 flex-wrap">

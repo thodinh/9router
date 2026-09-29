@@ -46,7 +46,7 @@ export function getSyncState() {
 }
 
 // "zai-org/GLM-4.6V:free" -> "glm-4.6v"
-function baseId(modelId) {
+export function baseId(modelId) {
   const withoutVendor = modelId.includes("/") ? modelId.split("/").pop() : modelId;
   return withoutVendor.toLowerCase().split(":")[0];
 }
@@ -69,6 +69,10 @@ function slim(catalog) {
         c: model?.limit?.context,
         o: model?.limit?.output,
         r: model?.reasoning || undefined,
+        // Price per million tokens (models.dev `cost`), kept for the Free-hunter
+        // tab: pi===0 && po===0 is a free model. undefined is dropped by JSON.
+        pi: model?.cost?.input,
+        po: model?.cost?.output,
       };
     }
     out[providerId] = models;

@@ -6,7 +6,10 @@ import { getRelativeTime } from "@/shared/utils";
 import { lookupParams } from "@/lib/modelLab/params.js";
 
 const MATRIX_PAGE = 40;
+const FLAT_PAGE = 100;
 const DRIFT_PAGE = 15;
+const VIEW_KEY = "9r-models-view";
+const HIDE_DISABLED_KEY = "9r-models-hide-disabled";
 
 const SORT_OPTIONS = [
   { value: "", label: "Order" },
@@ -74,13 +77,16 @@ function RatingStars({ rating }) {
 
 // Aligned table of configured/imported models — fixed columns so status,
 // latency and long error messages never break the row layout.
-function ConfiguredTable({ group, items, resultsMap, liveResults, testingKey, copied, disabled, onCopy, onTest, onToggleDisabled }) {
+// rows: [{ group, item }] — flat mode passes showProvider to add the column.
+function ConfiguredTable({ rows, showProvider = false, emptyMessage = "No models to show.", resultsMap, liveResults, testingKey, copied, disabled, onCopy, onTest, onToggleDisabled }) {
+  const colSpan = 7 + (showProvider ? 1 : 0);
   return (
     <div className="max-h-[55vh] overflow-y-auto">
       <table className="w-full text-sm border-collapse">
         <thead className="sticky top-0 bg-surface-2 z-10">
           <tr className="text-left text-xs text-text-muted">
-            <th className="px-3 py-2 font-medium w-[26%]">Model</th>
+            {showProvider && <th className="px-3 py-2 font-medium w-40">Provider</th>}
+            <th className="px-3 py-2 font-medium w-[24%]">Model</th>
             <th className="px-3 py-2 font-medium w-20">Params</th>
             <th className="px-3 py-2 font-medium w-36">Rating</th>
             <th className="px-3 py-2 font-medium w-24">Status</th>
@@ -90,20 +96,25 @@ function ConfiguredTable({ group, items, resultsMap, liveResults, testingKey, co
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {items.length === 0 && (
+          {rows.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-3 py-6 text-center text-xs text-text-muted">
-                {group.liveError ? `No models — live fetch failed: ${group.liveError}` : "No models configured for this provider."}
+              <td colSpan={colSpan} className="px-3 py-6 text-center text-xs text-text-muted">
+                {emptyMessage}
               </td>
             </tr>
           )}
-          {items.map((item) => {
+          {rows.map(({ group, item }) => {
             const key = modelKey(group.provider, item);
             const result = liveResults[key] || resultsMap[key];
             const isDisabled = (disabled[group.provider] || []).includes(item.id);
             const price = item.pricePrompt != null ? blendedPrice(item) : null;
             return (
               <tr key={key} className="hover:bg-surface-2/40">
+                {showProvider && (
+                  <td className="px-3 py-2" title={group.provider}>
+                    <span className="block max-w-[140px] truncate text-xs text-text-muted">{group.displayName}</span>
+                  </td>
+                )}
                 <td className="px-3 py-2 min-w-0">
                   <div className="flex items-center gap-2">
                     <code className={`font-mono text-[13px] truncate max-w-[200px] ${isDisabled ? "line-through text-text-muted" : ""}`} title={item.id}>
@@ -254,6 +265,10 @@ export default function ModelsLabPageClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [view, setView] = useState("flat");
+  const [hideDisabled, setHideDisabled] = useState(false);
+  const [sortFlat, setSortFlat] = useState("");
+  const [flatLimit, setFlatLimit] = useState(FLAT_PAGE);
   const [expanded, setExpanded] = useState(() => new Set());
   const [visibleCount, setVisibleCount] = useState({});
   const [sortSel, setSortSel] = useState({});
@@ -285,6 +300,11 @@ export default function ModelsLabPageClient() {
   useEffect(() => {
     const init = async () => {
       const data = await loadLab();
+      try {
+        const v = globalThis.localStorage?.getItem(VIEW_KEY);
+        if (v === "flat" || v === "grouped") setView(v);
+        if (globalThis.localStorage?.getItem(HIDE_DISABLED_KEY) === "1") setHideDisabled(true);
+      } catch { /* prefs are best-effort */ }
       if (!data) return;
       const auto = new Set(data.providers.filter((p) => (p.itemCount || 0) <= 12).map((p) => p.provider));
       setExpanded(auto);
@@ -293,10 +313,26 @@ export default function ModelsLabPageClient() {
     return () => readerRef.current?.cancel?.();
   }, [loadLab]);
 
+  const changeView = useCallback((v) => {
+    setView(v);
+    setFlatLimit(FLAT_PAGE);
+    try { globalThis.localStorage?.setItem(VIEW_KEY, v); } catch { /* ignore */ }
+  }, []);
+
+  const toggleHideDisabled = useCallback(() => {
+    setHideDisabled((prev) => {
+      const next = !prev;
+      try { globalThis.localStorage?.setItem(HIDE_DISABLED_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+    setFlatLimit(FLAT_PAGE);
+  }, []);
+
   const onSearch = (value) => {
     setSearch(value);
     setExpanded(() => new Set());
     setVisibleCount(() => ({}));
+    setFlatLimit(FLAT_PAGE);
   };
 
   const applySweepEvent = useCallback((evt) => {
@@ -484,7 +520,9 @@ export default function ModelsLabPageClient() {
 
   const countsFor = (group) => {
     const c = { ok: 0, fail: 0, untested: 0 };
+    const dis = lab.disabled?.[group.provider] || [];
     for (const item of group.items) {
+      if (hideDisabled && dis.includes(item.id)) continue;
       const r = liveResults[modelKey(group.provider, item)] || resultsMap[modelKey(group.provider, item)];
       if (!r) c.untested++;
       else if (r.ok) c.ok++;
@@ -515,12 +553,31 @@ export default function ModelsLabPageClient() {
     }
   };
 
+  const disabledMap = lab.disabled || {};
+  const disabledTotal = Object.values(disabledMap).reduce((n, a) => n + (a?.length || 0), 0);
+  const isDis = (provider, id) => (disabledMap[provider] || []).includes(id);
+
+  // Flat (default) view — every model in one list; search matches model id too.
+  const flatRows = [];
+  for (const g of lab.providers) {
+    const providerMatch = !q || `${g.displayName} ${g.provider} ${g.alias}`.toLowerCase().includes(q);
+    for (const item of g.items) {
+      if (hideDisabled && isDis(g.provider, item.id)) continue;
+      if (q && !providerMatch && !item.id.toLowerCase().includes(q)) continue;
+      flatRows.push({ group: g, item });
+    }
+  }
+  const cmpFlat = sortComparator(sortFlat);
+  const flatSorted = cmpFlat ? [...flatRows].sort(cmpFlat) : flatRows;
+  const flatVisible = flatSorted.slice(0, flatLimit);
+  const driftPending = (lab.drift || []).filter((d) => (d.newModels?.length || 0) > 0);
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Model Lab</h1>
-          <p className="text-sm text-text-muted mt-1">Models per provider, test vs live drift suggestions.</p>
+          <p className="text-sm text-text-muted mt-1">All models in one list or grouped by provider — test vs live drift suggestions.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Button variant="secondary" icon="sync" onClick={() => syncDrift()} loading={busy === "drift"} disabled={sweep.running}>
@@ -557,14 +614,83 @@ export default function ModelsLabPageClient() {
         </div>
       )}
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => onSearch(e.target.value)}
-        placeholder="Filter providers…"
-        className="max-w-md px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-      />
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Filter models or providers…"
+          className="flex-1 min-w-[220px] max-w-md px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+        />
+        {view === "flat" && (
+          <select
+            value={sortFlat}
+            onChange={(e) => { setSortFlat(e.target.value); setFlatLimit(FLAT_PAGE); }}
+            className="px-2 py-2 text-xs text-text-muted bg-background border border-border rounded-lg focus:outline-none focus:border-primary"
+            title="Sort all models"
+          >
+            {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        )}
+        <button
+          onClick={toggleHideDisabled}
+          className="flex items-center gap-1 px-2.5 py-2 text-xs border border-border rounded-lg text-text-muted hover:text-primary hover:bg-surface-2 transition-colors"
+          title={hideDisabled ? "Disabled models are hidden — click to show them" : `Disabled models are visible — click to hide them${disabledTotal ? ` (${disabledTotal})` : ""}`}
+        >
+          <span className={`material-symbols-outlined text-base ${hideDisabled ? "text-brand-500" : ""}`}>{hideDisabled ? "toggle_on" : "toggle_off"}</span>
+          {hideDisabled ? "Show disabled" : `Hide disabled${disabledTotal ? ` (${disabledTotal})` : ""}`}
+        </button>
+        <div className="flex items-center border border-border rounded-lg overflow-hidden text-xs">
+          <button
+            onClick={() => changeView("flat")}
+            className={`px-3 py-2 transition-colors ${view === "flat" ? "bg-brand-500 text-white" : "text-text-muted hover:bg-surface-2 hover:text-primary"}`}
+            title="Flat list of all models"
+          >All models</button>
+          <button
+            onClick={() => changeView("grouped")}
+            className={`px-3 py-2 transition-colors ${view === "grouped" ? "bg-brand-500 text-white" : "text-text-muted hover:bg-surface-2 hover:text-primary"}`}
+            title="Group models by provider"
+          >By provider</button>
+        </div>
+      </div>
 
+      {view === "flat" ? (
+        <div className="border border-border rounded-xl overflow-hidden">
+          {driftPending.length > 0 && (
+            <div className="px-4 py-2 bg-yellow-500/5 border-b border-border flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-text-muted">New models detected:</span>
+              {driftPending.map((d) => {
+                const g = lab.providers.find((p) => p.provider === d.provider);
+                return (
+                  <button key={d.provider} onClick={() => setDriftProvider(d.provider)} className="hover:opacity-80" title={`Review new models for ${g?.displayName || d.provider}`}>
+                    <Badge variant="warning" size="sm">{g?.displayName || d.provider} · {d.newModels.length} new</Badge>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <ConfiguredTable
+            rows={flatVisible}
+            showProvider
+            emptyMessage={q || hideDisabled ? "No models match the filter." : "No models configured."}
+            resultsMap={resultsMap}
+            liveResults={liveResults}
+            testingKey={testingKey}
+            copied={copied}
+            disabled={disabledMap}
+            onCopy={copyText}
+            onTest={testOne}
+            onToggleDisabled={toggleDisabled}
+          />
+          {flatSorted.length > flatVisible.length && (
+            <div className="px-4 py-2 flex items-center justify-between border-t border-border">
+              <span className="text-xs text-text-muted">Showing {flatVisible.length} of {flatSorted.length}</span>
+              <Button size="sm" variant="secondary" icon="expand_more" onClick={() => setFlatLimit((l) => l + FLAT_PAGE)}>Load more</Button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {visibleGroups.length === 0 && <p className="text-sm text-text-muted">No providers match.</p>}
 
       {visibleGroups.map((group) => {
@@ -575,9 +701,9 @@ export default function ModelsLabPageClient() {
         const limit = visibleCount[group.provider] || MATRIX_PAGE;
         const sortKey = sortSel[group.provider] || "";
         const cmp = sortComparator(sortKey);
-        const sorted = cmp ? [...group.items].sort(cmp) : group.items;
+        const baseItems = hideDisabled ? group.items.filter((item) => !isDis(group.provider, item.id)) : group.items;
+        const sorted = cmp ? [...baseItems].sort(cmp) : baseItems;
         const visibleItems = sorted.slice(0, limit);
-        const disabled = lab.disabled || {};
 
         return (
           <div key={group.provider} className="border border-border rounded-xl overflow-hidden">
@@ -639,7 +765,7 @@ export default function ModelsLabPageClient() {
             {isOpen && (
               <div className="flex flex-col">
                 <div className="px-4 py-2 border-b border-border flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs text-text-muted">{group.itemCount} models</span>
+                  <span className="text-xs text-text-muted">{baseItems.length} models</span>
                   <select
                     value={sortKey}
                     onChange={(e) => setSortSel((prev) => ({ ...prev, [group.provider]: e.target.value }))}
@@ -650,20 +776,20 @@ export default function ModelsLabPageClient() {
                   </select>
                 </div>
                 <ConfiguredTable
-                  group={group}
-                  items={visibleItems}
+                  rows={visibleItems.map((item) => ({ group, item }))}
+                  emptyMessage={group.liveError ? `No models — live fetch failed: ${group.liveError}` : baseItems.length === 0 && group.items.length > 0 ? "All models hidden (disabled filter)." : "No models configured for this provider."}
                   resultsMap={resultsMap}
                   liveResults={liveResults}
                   testingKey={testingKey}
                   copied={copied}
-                  disabled={disabled}
+                  disabled={disabledMap}
                   onCopy={copyText}
                   onTest={testOne}
                   onToggleDisabled={toggleDisabled}
                 />
-                {group.items.length > visibleItems.length && (
+                {sorted.length > visibleItems.length && (
                   <div className="px-4 py-2 flex items-center justify-between border-t border-border">
-                    <span className="text-xs text-text-muted">Showing {visibleItems.length} of {group.items.length}</span>
+                    <span className="text-xs text-text-muted">Showing {visibleItems.length} of {sorted.length}</span>
                     <Button size="sm" variant="secondary" icon="expand_more" onClick={() => loadMore(group.provider)}>Load more</Button>
                   </div>
                 )}
@@ -672,6 +798,8 @@ export default function ModelsLabPageClient() {
           </div>
         );
       })}
+        </>
+      )}
 
       {driftGroup && (
         <DriftModal

@@ -10,7 +10,13 @@ services:
     ports:
       - "20128:20128"
     volumes:
-      - 9router-data:/app/data
+      # Reuse the existing data dir from a previous CLI (9router) setup so the
+      # old SQLite DB (db/data.sqlite), settings, certs and logs survive the
+      # switch to Docker Compose. Host path: $HOME/.9router → container /app/data.
+      - "${HOME:-.}/.9router:/app/data"
+      # /root/.9router is symlinked to /app/data-home inside the image; the app
+      # writes usage/logs there, so back it with the same host folder too.
+      - "${HOME:-.}/.9router:/app/data-home"
     env_file:
       - .env
     environment:
@@ -18,45 +24,3 @@ services:
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
-
-  headroom:
-    image: ghcr.io/chopratejas/headroom:latest
-    container_name: headroom
-    restart: always
-    ports:
-      - "8787:8787"
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: 9router-cloudflared
-    restart: always
-    # The tunnel is managed remotely by Cloudflare. The host network lets a
-    # dashboard route of http://localhost:20128 reach the published 9Router
-    # service. The host alias also keeps http://9router:20128 routes working.
-    network_mode: host
-    extra_hosts:
-      - "9router:127.0.0.1"
-    command:
-      - tunnel
-      - --no-autoupdate
-      - --protocol
-      - http2
-      - --edge-ip-version
-      - "4"
-      - --metrics
-      - 127.0.0.1:0
-      - run
-      - --token
-      - ${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN is required in .env}
-      - --url
-      - http://127.0.0.1:20128
-    depends_on:
-      9router:
-        condition: service_started
-
-volumes:
-  9router-data:
-    name: 9router-data
